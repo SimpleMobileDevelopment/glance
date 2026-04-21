@@ -1,0 +1,19 @@
+{
+  "name": "glance",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.7"
+  },
+  "scripts": {
+    "start": "node --env-file-if-exists=.env mission-control.ts",
+    "serve": "node --env-file-if-exists=.env server.ts",
+    "open": "start dist/index.html"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.89.0",
+    "compare-versions": "^6.1.1",
+    "rss-parser": "^3.13.0"
+  }
+}

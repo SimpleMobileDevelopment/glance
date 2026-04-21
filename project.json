@@ -1,0 +1,8 @@
+{
+  "displayName": "My Project",
+  "github": {
+    "username": "",
+    "tokenEnv": "GITHUB_TOKEN"
+  },
+  "widgets": {}
+}

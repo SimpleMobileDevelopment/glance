@@ -1,0 +1,7 @@
+node_modules/
+dist/
+.env
+.alerts-cache.json
+.google-auth.json
+.release-checklist.json
+*.log

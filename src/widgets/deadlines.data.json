@@ -1,0 +1,17 @@
+{
+  "_comment": "Curated Android/Play platform deadlines. Verify against Google's official announcements before relying on projected dates. Source: https://support.google.com/googleplay/android-developer/answer/11926878",
+  "items": [
+    {
+      "name": "Android 16 (API 36) target required for new Play apps",
+      "date": "2026-08-31",
+      "category": "Play policy (projected)",
+      "url": "https://support.google.com/googleplay/android-developer/answer/11926878"
+    },
+    {
+      "name": "Android 16 (API 36) target required for Play app updates",
+      "date": "2026-11-01",
+      "category": "Play policy (projected)",
+      "url": "https://support.google.com/googleplay/android-developer/answer/11926878"
+    }
+  ]
+}
