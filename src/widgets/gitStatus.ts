@@ -1,8 +1,8 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import path from 'node:path';
-import type { ProjectConfig, WidgetModule, Result } from '../types.ts';
-import { card, escape } from '../render.ts';
+import type { ProjectConfig, WidgetModule, Result, Hero } from '../types.ts';
+import { card, escape, dot, type Tone } from '../render.ts';
 
 const execFileP = promisify(execFile);
 
@@ -31,35 +31,47 @@ function renderRepo(repoPath: string, result: Result<RepoStatus>): string {
   const label = escape(path.basename(repoPath));
   if (!result.ok) {
     return `<li>
+      ${dot('red')}
       <span class="repo">${label}</span>
       <span style="color:var(--error)">${escape(result.error)}</span>
     </li>`;
   }
   if (result.data.count === 0) {
     return `<li>
+      ${dot('green')}
       <span class="repo">${label}</span>
-      <span class="ok">clean ✓</span>
+      <span class="muted">clean</span>
     </li>`;
   }
   const preview = result.data.preview
     .map(line => `<div class="meta">${escape(line)}</div>`)
     .join('');
   return `<li>
+    ${dot('amber')}
     <span class="repo">${label}</span>
-    <span class="warn">${result.data.count} change${result.data.count === 1 ? '' : 's'}</span>
+    <span class="tone-amber">${result.data.count} change${result.data.count === 1 ? '' : 's'}</span>
     ${preview}
   </li>`;
 }
 
-async function render(project: ProjectConfig): Promise<string> {
+async function render(project: ProjectConfig): Promise<{ html: string; hero?: Hero }> {
   const config = (project.widgets.gitStatus ?? {}) as GitStatusConfig;
   const paths = config.paths ?? [];
   if (paths.length === 0) {
-    return card('Local changes', `<p class="muted">No repos configured. Add some to project.json under widgets.gitStatus.paths.</p>`);
+    return {
+      html: card('Local changes', `<p class="muted">No repos configured. Add some to project.json under widgets.gitStatus.paths.</p>`),
+    };
   }
   const results = await Promise.all(paths.map(async p => ({ repoPath: p, result: await statusOf(p) })));
   const body = `<ul>${results.map(r => renderRepo(r.repoPath, r.result)).join('')}</ul>`;
-  return card('Local changes', body);
+  const totalChanges = results.reduce((n, r) => n + (r.result.ok ? r.result.data.count : 0), 0);
+  const hasError = results.some(r => !r.result.ok);
+  const tone: Tone = hasError ? 'red' : totalChanges === 0 ? 'green' : 'amber';
+  const hero: Hero = { value: totalChanges, tone, label: totalChanges === 1 ? 'change' : 'changes' };
+  return {
+    html: card('Local changes', body, { hero }),
+    hero,
+  };
 }
 
 export const gitStatus: WidgetModule = {
@@ -74,5 +86,5 @@ export const gitStatus: WidgetModule = {
       description: 'Absolute paths to local git repos.',
     },
   ],
-  run: async project => ({ html: await render(project) }),
+  run: async project => render(project),
 };

@@ -57,7 +57,7 @@ async function render(project: ProjectConfig): Promise<string> {
     <li>
       <a href="${escape(it.url)}" target="_blank" rel="noreferrer">${escape(it.title)}</a>
       ${it.description ? `<div class="desc">${escape(it.description)}</div>` : ''}
-      <span class="meta">${escape(it.source)} · ${relTime(it.pubDate)} ago</span>
+      <span class="meta">${escape(it.source)} · ${relTime(it.pubDate)}</span>
     </li>`);
   return card('Intel feed', truncatedList(rows, { listClass: 'feed' }));
 }

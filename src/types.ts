@@ -19,9 +19,18 @@ export type FieldSpec =
       description?: string;
     };
 
+export type Tone = 'red' | 'amber' | 'green' | 'muted';
+
+export type Hero = {
+  value: string | number;
+  tone?: Tone;
+  label?: string;
+};
+
 export type WidgetResult = {
   html: string;
   summary?: unknown;
+  hero?: Hero;
 };
 
 export type WidgetModule = {

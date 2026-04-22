@@ -1,17 +1,19 @@
-import type { ProjectConfig } from './types.ts';
+import type { ProjectConfig, Hero } from './types.ts';
 import { REGISTRY } from './registry.ts';
 import { safeRun } from './runtime.ts';
 import { renderProjectPage } from './render.ts';
 
+type WidgetRenderState = { html: string; hero?: Hero };
+
 type PageState = {
   html: string;
-  widgetHtml: Map<string, string>;
+  widgets: Map<string, WidgetRenderState>;
   generatedAt: Date;
 };
 
 const state: PageState = {
   html: '',
-  widgetHtml: new Map<string, string>(),
+  widgets: new Map<string, WidgetRenderState>(),
   generatedAt: new Date(0),
 };
 
@@ -24,12 +26,12 @@ function enabledWidgetsFor(project: ProjectConfig) {
   return REGISTRY.filter(w => w.id in widgetsConfig);
 }
 
-function composeSections(project: ProjectConfig): { id: string; html: string }[] {
+function composeSections(project: ProjectConfig): { id: string; html: string; hero?: Hero }[] {
   const enabled = enabledWidgetsFor(project);
-  const sections: { id: string; html: string }[] = [];
+  const sections: { id: string; html: string; hero?: Hero }[] = [];
   for (const widget of enabled) {
-    const html = state.widgetHtml.get(widget.id);
-    if (html) sections.push({ id: widget.id, html });
+    const entry = state.widgets.get(widget.id);
+    if (entry) sections.push({ id: widget.id, html: entry.html, hero: entry.hero });
   }
   return sections;
 }
@@ -37,13 +39,17 @@ function composeSections(project: ProjectConfig): { id: string; html: string }[]
 export async function rebuildAll(project: ProjectConfig): Promise<void> {
   const enabled = enabledWidgetsFor(project);
   const results = await Promise.all(enabled.map(w => safeRun(w, project)));
-  const newMap = new Map<string, string>();
+  const newMap = new Map<string, WidgetRenderState>();
   enabled.forEach((w, i) => {
-    newMap.set(w.id, results[i].html);
+    newMap.set(w.id, { html: results[i].html, hero: results[i].hero });
   });
-  state.widgetHtml = newMap;
+  state.widgets = newMap;
   state.generatedAt = new Date();
-  const sections = enabled.map(w => ({ id: w.id, html: newMap.get(w.id) ?? '' }));
+  const sections = enabled.map(w => ({
+    id: w.id,
+    html: newMap.get(w.id)?.html ?? '',
+    hero: newMap.get(w.id)?.hero,
+  }));
   state.html = renderProjectPage(project, sections, state.generatedAt);
 }
 
@@ -58,7 +64,7 @@ export async function refreshWidget(
     throw new Error(`widget not enabled: ${widgetId}`);
   }
   const result = await safeRun(widget, project);
-  state.widgetHtml.set(widget.id, result.html);
+  state.widgets.set(widget.id, { html: result.html, hero: result.hero });
   state.generatedAt = new Date();
   const sections = composeSections(project);
   state.html = renderProjectPage(project, sections, state.generatedAt);

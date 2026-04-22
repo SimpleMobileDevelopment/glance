@@ -1,5 +1,5 @@
-import type { ProjectConfig, WidgetModule, Result } from '../types.ts';
-import { card, errorCard, escape, relTime, truncatedList } from '../render.ts';
+import type { ProjectConfig, WidgetModule, Result, Hero } from '../types.ts';
+import { card, errorCard, escape, relTime, truncatedList, type Tone } from '../render.ts';
 import { memoize, conditionalFetch } from '../cache.ts';
 import { fetchIssues, type LinearIssueRef } from './linear.ts';
 
@@ -101,11 +101,15 @@ function renderLinearBadges(pr: PR, issuesById: Map<string, LinearIssueRef>): st
   return badges.join('');
 }
 
-function renderPRList(label: string, prs: PR[], issuesById: Map<string, LinearIssueRef>): string {
+function renderPRList(label: string, prs: PR[], issuesById: Map<string, LinearIssueRef>, showAuthor: boolean): string {
   if (prs.length === 0) {
     return `<h3>${escape(label)}</h3><p class="muted">Nothing here.</p>`;
   }
-  const rows = prs.map(p => `
+  const rows = prs.map(p => {
+    const meta = showAuthor
+      ? `<span class="meta">by ${escape(p.author)} · ${relTime(p.updatedAt)}</span>`
+      : `<span class="meta">${relTime(p.updatedAt)}</span>`;
+    return `
     <li>
       <a href="${escape(p.url)}" target="_blank" rel="noreferrer">
         <span class="repo">${escape(p.repo)}</span>
@@ -114,12 +118,13 @@ function renderPRList(label: string, prs: PR[], issuesById: Map<string, LinearIs
         <span class="title">${escape(p.title)}</span>
       </a>
       ${renderLinearBadges(p, issuesById)}
-      <span class="meta">by ${escape(p.author)} · ${relTime(p.updatedAt)} ago</span>
-    </li>`);
+      ${meta}
+    </li>`;
+  });
   return `<h3>${escape(label)} <span class="count">${prs.length}</span></h3>${truncatedList(rows, { listClass: 'prs' })}`;
 }
 
-async function render(project: ProjectConfig): Promise<{ html: string; summary: PRSummary }> {
+async function render(project: ProjectConfig): Promise<{ html: string; summary: PRSummary; hero?: Hero }> {
   const result = await fetchPRs(project);
   if (!result.ok) {
     return { html: errorCard('PR queue', result.error), summary: { mine: 0, reviewQueue: 0 } };
@@ -139,14 +144,18 @@ async function render(project: ProjectConfig): Promise<{ html: string; summary: 
     }
   }
 
-  const body = renderPRList('Yours', result.data.mine, issuesById) +
-               renderPRList('Awaiting your review', result.data.reviewQueue, issuesById);
+  const body = renderPRList('Yours', result.data.mine, issuesById, false) +
+               renderPRList('Awaiting your review', result.data.reviewQueue, issuesById, true);
+  const reviewQueue = result.data.reviewQueue.length;
+  const tone: Tone = reviewQueue === 0 ? 'green' : reviewQueue >= 5 ? 'red' : 'amber';
+  const hero = { value: reviewQueue, tone, label: 'for review' };
   return {
-    html: card('PR queue', body),
+    html: card('PR queue', body, { hero }),
     summary: {
       mine: result.data.mine.length,
-      reviewQueue: result.data.reviewQueue.length,
+      reviewQueue,
     },
+    hero,
   };
 }
 
@@ -155,7 +164,7 @@ export const prs: WidgetModule = {
   title: 'PR queue',
   envVars: project => [project.github.tokenEnv],
   run: async project => {
-    const { html, summary } = await render(project);
-    return { html, summary };
+    const { html, summary, hero } = await render(project);
+    return { html, summary, hero };
   },
 };

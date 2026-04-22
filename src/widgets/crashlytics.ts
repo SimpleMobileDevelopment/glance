@@ -2,8 +2,8 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import path from 'node:path';
 import Anthropic from '@anthropic-ai/sdk';
-import type { ProjectConfig, WidgetModule } from '../types.ts';
-import { card, errorCard, escape } from '../render.ts';
+import type { ProjectConfig, WidgetModule, Hero } from '../types.ts';
+import { card, errorCard, escape, sparkline, type Tone } from '../render.ts';
 import { getAccessToken, hasOAuthClient, hasRefreshToken } from '../auth/google.ts';
 import { runQuery, fetchDatasetLocation, listTables } from '../bigquery.ts';
 import { googleJson } from '../google/client.ts';
@@ -111,6 +111,38 @@ async function fetchImpactedUsers(
     { name: 'lookback_days', type: 'INT64', value: String(lookbackDays) },
   ], location ?? undefined);
   return Number(rows[0]?.users ?? 0);
+}
+
+async function fetchDailyCrashCounts(
+  gcpProjectId: string, dataset: string, table: string, lookbackDays: number, location: string | null,
+): Promise<number[]> {
+  // Bucket fatal events per UTC day across the lookback window. The output
+  // array has one entry per day (oldest first), zero-filled for any day with
+  // no crashes so the sparkline reads as a continuous timeline.
+  const sql = `
+    SELECT
+      DATE(event_timestamp) AS day,
+      COUNT(*) AS events
+    FROM \`${gcpProjectId}.${dataset}.${table}\`
+    WHERE event_timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL @lookback_days DAY)
+      AND is_fatal = TRUE
+    GROUP BY day
+    ORDER BY day ASC
+  `;
+  const rows = await runQuery<{ day: string; events: string }>(gcpProjectId, sql, [
+    { name: 'lookback_days', type: 'INT64', value: String(lookbackDays) },
+  ], location ?? undefined);
+  const byDay = new Map<string, number>();
+  for (const r of rows) byDay.set(r.day, Number(r.events ?? 0));
+  const out: number[] = [];
+  const today = new Date();
+  for (let i = lookbackDays - 1; i >= 0; i--) {
+    const d = new Date(today);
+    d.setUTCDate(d.getUTCDate() - i);
+    const key = d.toISOString().slice(0, 10);
+    out.push(byDay.get(key) ?? 0);
+  }
+  return out;
 }
 
 function normalizeSourceRoots(raw: unknown): SourceRoot[] {
@@ -279,7 +311,7 @@ async function computeRootCause(
   }
 }
 
-async function render(project: ProjectConfig): Promise<string> {
+async function render(project: ProjectConfig): Promise<{ html: string; hero?: Hero }> {
   const config = (project.widgets.crashlytics ?? {}) as CrashlyticsConfig;
   const { firebaseProjectId, appId, gcpProjectId } = config;
   const explicitPackageName = config.packageName?.toString().trim() || undefined;
@@ -288,17 +320,17 @@ async function render(project: ProjectConfig): Promise<string> {
   const sourceRoots = normalizeSourceRoots(config.sourceRoots);
 
   if (!firebaseProjectId) {
-    return card('Crashlytics', `<p class="muted">Set <code>widgets.crashlytics.firebaseProjectId</code> in project.json.</p>`);
+    return { html: card('Crashlytics', `<p class="muted">Set <code>widgets.crashlytics.firebaseProjectId</code> in project.json.</p>`) };
   }
-  if (!hasOAuthClient()) return errorCard('Crashlytics', 'Google OAuth client not configured — see /settings.');
-  if (!hasRefreshToken()) return errorCard('Crashlytics', 'Not connected to Google — click Connect on /settings.');
+  if (!hasOAuthClient()) return { html: errorCard('Crashlytics', 'Google OAuth client not configured — see /settings.') };
+  if (!hasRefreshToken()) return { html: errorCard('Crashlytics', 'Not connected to Google — click Connect on /settings.') };
 
   try { await getAccessToken(); }
-  catch (e) { return errorCard('Crashlytics', (e as Error).message); }
+  catch (e) { return { html: errorCard('Crashlytics', (e as Error).message) }; }
 
   let apps: AndroidApp[];
   try { apps = await fetchAndroidApps(firebaseProjectId); }
-  catch (e) { return errorCard('Crashlytics', (e as Error).message); }
+  catch (e) { return { html: errorCard('Crashlytics', (e as Error).message) }; }
 
   const primary = pickPrimaryApp(apps, appId, explicitPackageName);
   if (!primary) {
@@ -306,7 +338,7 @@ async function render(project: ProjectConfig): Promise<string> {
       appId ? `appId <code>${escape(appId)}</code>` : null,
       explicitPackageName ? `package <code>${escape(explicitPackageName)}</code>` : null,
     ].filter(Boolean).join(' / ');
-    return card('Crashlytics', `<p class="muted">No matching Android apps in <code>${escape(firebaseProjectId)}</code>${filters ? ` for ${filters}` : ''}.</p>`);
+    return { html: card('Crashlytics', `<p class="muted">No matching Android apps in <code>${escape(firebaseProjectId)}</code>${filters ? ` for ${filters}` : ''}.</p>`) };
   }
 
   const table = config.table?.toString().trim() || deriveTableName(primary.packageName);
@@ -326,14 +358,16 @@ async function render(project: ProjectConfig): Promise<string> {
     <span class="meta"><code>${escape(primary.packageName)}</code> · BigQuery: <code>${escape(`${gcpProjectId ?? '?'}.${dataset}.${table}`)}</code>${datasetLocation ? ` · location <code>${escape(datasetLocation)}</code>` : ''}</span>
   </p>`;
 
-  const [issueRes, impactedRes] = gcpProjectId
+  const [issueRes, impactedRes, dailyRes] = gcpProjectId
     ? await Promise.allSettled([
         fetchTopIssues(gcpProjectId, dataset, table, lookbackDays, datasetLocation),
         fetchImpactedUsers(gcpProjectId, dataset, table, lookbackDays, datasetLocation),
+        fetchDailyCrashCounts(gcpProjectId, dataset, table, lookbackDays, datasetLocation),
       ])
     : [
         { status: 'fulfilled', value: [] as IssueRow[] } as const,
         { status: 'fulfilled', value: null as number | null } as const,
+        { status: 'fulfilled', value: [] as number[] } as const,
       ];
 
   const errors: string[] = [...datasetErrors];
@@ -341,6 +375,7 @@ async function render(project: ProjectConfig): Promise<string> {
   if (issueRes.status === 'rejected') errors.push(`top issues: ${(issueRes.reason as Error).message}`);
   const impacted = impactedRes.status === 'fulfilled' ? (impactedRes.value as number | null) : null;
   if (impactedRes.status === 'rejected') errors.push(`impacted users: ${(impactedRes.reason as Error).message}`);
+  const daily = dailyRes.status === 'fulfilled' ? (dailyRes.value as number[]) : [];
 
   let tableHint = '';
   const tableNotFound = gcpProjectId && (
@@ -369,7 +404,7 @@ async function render(project: ProjectConfig): Promise<string> {
 
   if (!gcpProjectId) {
     const bqMissing = `<p class="muted">Set <code>gcpProjectId</code> to query BigQuery for top issues.</p>`;
-    return card('Crashlytics', headerBlock + bqMissing + (errors.length ? `<p class="error">${escape(errors.join(' · '))}</p>` : ''));
+    return { html: card('Crashlytics', headerBlock + bqMissing + (errors.length ? `<p class="error">${escape(errors.join(' · '))}</p>` : '')) };
   }
 
   // Precompute root-cause hints for the top N issues (parallel, all-or-nothing per issue).
@@ -414,7 +449,26 @@ async function render(project: ProjectConfig): Promise<string> {
     ? ''
     : `<p class="error">${escape(residualErrors.join(' · '))}</p>`;
 
-  return card('Crashlytics', headerBlock + impactedBlock + issuesBlock + tableHint + errorBlock);
+  // Hero = impacted users count. Tone is a trend signal: green if the last day
+  // is below the window average (downward), amber on flat or rising, red if
+  // the latest day is a clear spike (≥2× the average).
+  const avg = daily.length > 0 ? daily.reduce((a, b) => a + b, 0) / daily.length : 0;
+  const last = daily[daily.length - 1] ?? 0;
+  const heroTone: Tone = impacted == null
+    ? 'muted'
+    : avg > 0 && last >= avg * 2 ? 'red'
+    : avg > 0 && last > avg ? 'amber'
+    : 'green';
+  const heroValue = impacted == null ? '—' : impacted.toLocaleString();
+  const hero: Hero = { value: heroValue, tone: heroTone, label: `users/${lookbackDays}d` };
+
+  return {
+    html: card('Crashlytics', headerBlock + impactedBlock + issuesBlock + tableHint + errorBlock, {
+      hero,
+      sparkline: daily.length > 0 ? sparkline(daily, { tone: heroTone }) : undefined,
+    }),
+    hero,
+  };
 }
 
 export const crashlytics: WidgetModule = {
@@ -482,5 +536,5 @@ export const crashlytics: WidgetModule = {
       ],
     },
   ],
-  run: async project => ({ html: await render(project) }),
+  run: async project => render(project),
 };

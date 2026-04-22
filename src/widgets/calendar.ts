@@ -1,4 +1,4 @@
-import type { ProjectConfig, WidgetModule } from '../types.ts';
+import type { ProjectConfig, WidgetModule, Hero } from '../types.ts';
 import { card, errorCard, escape, truncatedList } from '../render.ts';
 import { hasOAuthClient, hasRefreshToken } from '../auth/google.ts';
 import { googleJson } from '../google/client.ts';
@@ -68,7 +68,7 @@ function endOfLocalDay(now: Date): Date {
   return end;
 }
 
-async function runCalendar(project: ProjectConfig): Promise<{ html: string; summary: CalendarSummary }> {
+async function runCalendar(project: ProjectConfig): Promise<{ html: string; summary: CalendarSummary; hero?: Hero }> {
   const config = (project.widgets.calendar ?? {}) as CalendarConfig;
   const calendarId = (config.calendarId?.toString().trim()) || 'primary';
   const emptySummary: CalendarSummary = { meetingsToday: 0 };
@@ -111,7 +111,12 @@ async function runCalendar(project: ProjectConfig): Promise<{ html: string; summ
   };
 
   if (events.length === 0) {
-    return { html: card('Calendar', `<p class="muted">No meetings scheduled in the next 24h ✓</p>`), summary };
+    const hero: Hero = { value: 0, tone: 'green', label: 'today' };
+    return {
+      html: card('Calendar', `<p class="muted">No meetings scheduled in the next 24h.</p>`, { hero }),
+      summary,
+      hero,
+    };
   }
 
   const next = events[0];
@@ -142,7 +147,16 @@ async function runCalendar(project: ProjectConfig): Promise<{ html: string; summ
         </li>`;
       }))}`;
 
-  return { html: card('Calendar', nextBlock + listBlock), summary };
+  const hero: Hero = {
+    value: todayEvents.length,
+    tone: 'muted',
+    label: todayEvents.length === 1 ? 'meeting' : 'meetings',
+  };
+  return {
+    html: card('Calendar', nextBlock + listBlock, { hero }),
+    summary,
+    hero,
+  };
 }
 
 export const calendar: WidgetModule = {
@@ -159,7 +173,7 @@ export const calendar: WidgetModule = {
     },
   ],
   run: async project => {
-    const { html, summary } = await runCalendar(project);
-    return { html, summary };
+    const { html, summary, hero } = await runCalendar(project);
+    return { html, summary, hero };
   },
 };

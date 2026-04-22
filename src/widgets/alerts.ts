@@ -1,8 +1,8 @@
 import { readFile, writeFile } from 'node:fs/promises';
 import Anthropic from '@anthropic-ai/sdk';
 import Parser from 'rss-parser';
-import type { ProjectConfig, WidgetModule } from '../types.ts';
-import { card, errorCard, escape, relTime, truncatedList } from '../render.ts';
+import type { ProjectConfig, WidgetModule, Hero } from '../types.ts';
+import { card, errorCard, escape, relTime, truncatedList, type Tone } from '../render.ts';
 
 type AlertsConfig = {
   stack?: string[];
@@ -129,32 +129,32 @@ async function classify(
   return parsed.items ?? [];
 }
 
-async function render(project: ProjectConfig): Promise<string> {
+async function render(project: ProjectConfig): Promise<{ html: string; hero?: Hero }> {
   const config = (project.widgets.alerts ?? {}) as AlertsConfig;
   const stack = config.stack ?? [];
   const model = config.model ?? DEFAULT_MODEL;
   const maxItems = config.maxItems ?? MAX_ITEMS_DEFAULT;
 
   if (stack.length === 0) {
-    return card('Action items', `<p class="muted">No stack configured. Add lines to project.json under widgets.alerts.stack so the model knows what to flag.</p>`);
+    return { html: card('Action items', `<p class="muted">No stack configured. Add lines to project.json under widgets.alerts.stack so the model knows what to flag.</p>`) };
   }
 
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) {
-    return errorCard('Action items', 'Set ANTHROPIC_API_KEY in .env (see .env.example).');
+    return { html: errorCard('Action items', 'Set ANTHROPIC_API_KEY in .env (see .env.example).') };
   }
 
   const feedConfig = (project.widgets.feed ?? {}) as FeedConfigRef;
   const sources = feedConfig.feeds ?? [];
   if (sources.length === 0) {
-    return card('Action items', '<p class="muted">Configure widgets.feed.feeds first — alerts scan the same sources.</p>');
+    return { html: card('Action items', '<p class="muted">Configure widgets.feed.feeds first — alerts scan the same sources.</p>') };
   }
 
   let items: FeedItem[];
   try {
     items = await fetchFeedItems(sources);
   } catch (e) {
-    return errorCard('Action items', `Feed fetch failed: ${(e as Error).message}`);
+    return { html: errorCard('Action items', `Feed fetch failed: ${(e as Error).message}`) };
   }
   items = items.slice(0, maxItems);
 
@@ -195,7 +195,11 @@ async function render(project: ProjectConfig): Promise<string> {
     const footer = classifyError
       ? `<p class="error">Classification error: ${escape(classifyError)}</p>`
       : '';
-    return card('Action items', `<p class="muted">Nothing requiring action in the latest ${items.length} items. ${newItems.length} new this run.</p>${footer}`);
+    const hero: Hero = { value: 0, tone: 'green', label: 'todos' };
+    return {
+      html: card('Action items', `<p class="muted">Nothing requiring action in the latest ${items.length} items. ${newItems.length} new this run.</p>${footer}`, { hero }),
+      hero,
+    };
   }
 
   const rows = actionable.map(c => `
@@ -205,14 +209,23 @@ async function render(project: ProjectConfig): Promise<string> {
         <span class="title">${escape(c.action ?? c.title)}</span>
       </a>
       <div class="desc">${escape(c.title)}</div>
-      <span class="meta">${escape(c.source)} · ${relTime(c.pubDate)} ago</span>
+      <span class="meta">${escape(c.source)} · ${relTime(c.pubDate)}</span>
     </li>`);
 
   const footer = classifyError
     ? `<p class="error">Classification error this run (showing cached results): ${escape(classifyError)}</p>`
     : '';
 
-  return card('Action items', `${truncatedList(rows)}${footer}`);
+  const tone: Tone = actionable.length === 0 ? 'green' : actionable.length >= 5 ? 'red' : 'amber';
+  const hero: Hero = {
+    value: actionable.length,
+    tone,
+    label: actionable.length === 1 ? 'todo' : 'todos',
+  };
+  return {
+    html: card('Action items', `${truncatedList(rows)}${footer}`, { hero }),
+    hero,
+  };
 }
 
 export const alerts: WidgetModule = {
@@ -235,5 +248,5 @@ export const alerts: WidgetModule = {
       description: 'Defaults to Haiku 4.5.',
     },
   ],
-  run: async project => ({ html: await render(project) }),
+  run: async project => render(project),
 };

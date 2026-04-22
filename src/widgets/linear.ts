@@ -1,5 +1,5 @@
-import type { ProjectConfig, WidgetModule, Result } from '../types.ts';
-import { card, errorCard, escape, relTime, truncatedList } from '../render.ts';
+import type { ProjectConfig, WidgetModule, Result, Hero } from '../types.ts';
+import { card, errorCard, escape, relTime, truncatedList, type Tone } from '../render.ts';
 import { memoize } from '../cache.ts';
 
 const LINEAR_TTL_MS = 60_000;
@@ -286,7 +286,7 @@ function renderIssues(issues: Issue[]): string {
         ${prio}
         <span class="title">${escape(i.title)}</span>
       </a>
-      <span class="meta">updated ${relTime(i.updatedAt)} ago</span>
+      <span class="meta">updated ${relTime(i.updatedAt)}</span>
     </li>`;
   });
   return `<h3>My issues <span class="count">${issues.length}</span></h3>${truncatedList(rows, { listClass: 'linear-issues' })}`;
@@ -301,23 +301,27 @@ function renderInbox(items: InboxItem[]): string {
       <a href="${escape(n.url)}" target="_blank" rel="noreferrer">
         <span class="title">${escape(n.actor)} ${escape(describeNotificationType(n.type))} ${escape(n.target)}</span>
       </a>
-      <span class="meta">${relTime(n.createdAt)} ago</span>
+      <span class="meta">${relTime(n.createdAt)}</span>
     </li>`);
   return `<h3>Inbox <span class="count">${items.length}</span></h3>${truncatedList(rows, { listClass: 'linear-inbox' })}`;
 }
 
-async function render(project: ProjectConfig): Promise<{ html: string; summary: LinearSummary }> {
+async function render(project: ProjectConfig): Promise<{ html: string; summary: LinearSummary; hero?: Hero }> {
   const result = await fetchLinear(project);
   if (!result.ok) {
     return { html: errorCard('Linear', result.error), summary: { inbox: 0, assigned: 0 } };
   }
   const body = renderIssues(result.data.issues) + renderInbox(result.data.inbox);
+  const inbox = result.data.inbox.length;
+  const tone: Tone = inbox === 0 ? 'green' : inbox >= 10 ? 'red' : 'amber';
+  const hero: Hero = { value: inbox, tone, label: 'unread' };
   return {
-    html: card('Linear', body),
+    html: card('Linear', body, { hero }),
     summary: {
-      inbox: result.data.inbox.length,
+      inbox,
       assigned: result.data.issues.length,
     },
+    hero,
   };
 }
 
@@ -345,7 +349,7 @@ export const linear: WidgetModule = {
     },
   ],
   run: async project => {
-    const { html, summary } = await render(project);
-    return { html, summary };
+    const { html, summary, hero } = await render(project);
+    return { html, summary, hero };
   },
 };

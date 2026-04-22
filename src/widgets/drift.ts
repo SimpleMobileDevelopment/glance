@@ -1,8 +1,8 @@
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { compareVersions } from 'compare-versions';
-import type { ProjectConfig, WidgetModule, Result } from '../types.ts';
-import { card, errorCard, escape, truncatedList } from '../render.ts';
+import type { ProjectConfig, WidgetModule, Result, Hero } from '../types.ts';
+import { card, errorCard, escape, truncatedList, type Tone } from '../render.ts';
 import { memoize, conditionalFetch } from '../cache.ts';
 
 const DRIFT_TTL_MS = 10 * 60_000;
@@ -197,11 +197,13 @@ function renderCatalog(report: CatalogReport): string {
   return `${header}${truncatedList(rows)}`;
 }
 
-async function render(project: ProjectConfig): Promise<string> {
+async function render(project: ProjectConfig): Promise<{ html: string; hero?: Hero }> {
   const config = (project.widgets.drift ?? {}) as DriftConfig;
   const catalogs = config.catalogs ?? [];
   if (catalogs.length === 0) {
-    return card('Dependency drift', `<p class="muted">No catalogs configured. Add some to project.json under widgets.drift.catalogs.</p>`);
+    return {
+      html: card('Dependency drift', `<p class="muted">No catalogs configured. Add some to project.json under widgets.drift.catalogs.</p>`),
+    };
   }
 
   const errors: string[] = [];
@@ -223,7 +225,13 @@ async function render(project: ProjectConfig): Promise<string> {
     body += `<p class="meta">${errors.length} dependencies couldn't be resolved in any known repo.</p>`;
   }
 
-  return card('Dependency drift', body);
+  const totalStale = reports.reduce((n, r) => n + (r.ok ? r.data.stale.length : 0), 0);
+  const tone: Tone = totalStale === 0 ? 'green' : totalStale >= 5 ? 'red' : 'amber';
+  const hero: Hero = { value: totalStale, tone, label: 'stale' };
+  return {
+    html: card('Dependency drift', body, { hero }),
+    hero,
+  };
 }
 
 export const drift: WidgetModule = {
@@ -238,5 +246,5 @@ export const drift: WidgetModule = {
       description: 'Absolute paths to libs.versions.toml files.',
     },
   ],
-  run: async project => ({ html: await render(project) }),
+  run: async project => render(project),
 };

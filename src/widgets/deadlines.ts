@@ -1,8 +1,8 @@
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
-import type { ProjectConfig, WidgetModule } from '../types.ts';
-import { card, errorCard, escape } from '../render.ts';
+import type { ProjectConfig, WidgetModule, Hero } from '../types.ts';
+import { card, errorCard, escape, type Tone } from '../render.ts';
 
 type CustomEntry = { name?: string; date?: string; url?: string };
 
@@ -54,7 +54,7 @@ function formatWhen(days: number, iso: string): string {
   return `${iso} · in ${days}d`;
 }
 
-async function render(project: ProjectConfig): Promise<string> {
+async function render(project: ProjectConfig): Promise<{ html: string; hero?: Hero }> {
   const config = (project.widgets.deadlines ?? {}) as DeadlinesConfig;
 
   let bundled: Deadline[] = [];
@@ -62,7 +62,7 @@ async function render(project: ProjectConfig): Promise<string> {
     try {
       bundled = await loadBundled();
     } catch (e) {
-      return errorCard('Deadlines', `Failed to load bundled data: ${(e as Error).message}`);
+      return { html: errorCard('Deadlines', `Failed to load bundled data: ${(e as Error).message}`) };
     }
   }
 
@@ -88,7 +88,7 @@ async function render(project: ProjectConfig): Promise<string> {
     .sort((a, b) => a.parsed.getTime() - b.parsed.getTime());
 
   if (enriched.length === 0) {
-    return card('Deadlines', `<p class="muted">Nothing upcoming. Add custom entries in settings (name | YYYY-MM-DD | url).</p>`);
+    return { html: card('Deadlines', `<p class="muted">Nothing upcoming. Add custom entries in settings (name | YYYY-MM-DD | url).</p>`) };
   }
 
   const rows = enriched.map(({ d, days }) => {
@@ -104,7 +104,14 @@ async function render(project: ProjectConfig): Promise<string> {
     </li>`;
   }).join('');
 
-  return card('Deadlines', `<ul>${rows}</ul>`);
+  const soonest = enriched[0].days;
+  const heroTone: Tone = soonest <= 7 ? 'red' : soonest <= 30 ? 'amber' : 'muted';
+  const heroValue = soonest < 0 ? `${Math.abs(soonest)}d ago` : soonest === 0 ? 'today' : `${soonest}d`;
+  const hero: Hero = { value: heroValue, tone: heroTone, label: 'next' };
+  return {
+    html: card('Deadlines', `<ul>${rows}</ul>`, { hero }),
+    hero,
+  };
 }
 
 export const deadlines: WidgetModule = {
@@ -123,5 +130,5 @@ export const deadlines: WidgetModule = {
       ],
     },
   ],
-  run: async project => ({ html: await render(project) }),
+  run: async project => render(project),
 };

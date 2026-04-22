@@ -22,7 +22,7 @@ const project = await loadProject();
 const widgetsConfig = project.widgets ?? {};
 const enabled = REGISTRY.filter(w => w.id in widgetsConfig);
 const results = await Promise.all(enabled.map(w => safeRun(w, project)));
-const sections = enabled.map((w, i) => ({ id: w.id, html: results[i].html }));
+const sections = enabled.map((w, i) => ({ id: w.id, html: results[i].html, hero: results[i].hero }));
 const html = renderProjectPage(project, sections, new Date());
 
 await mkdir(OUT_DIR, { recursive: true });

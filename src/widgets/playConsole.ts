@@ -1,5 +1,5 @@
-import type { ProjectConfig, WidgetModule } from '../types.ts';
-import { card, errorCard, escape, relTime, truncatedList } from '../render.ts';
+import type { ProjectConfig, WidgetModule, Hero } from '../types.ts';
+import { card, errorCard, escape, relTime, truncatedList, dot, type Tone } from '../render.ts';
 import { hasOAuthClient, hasRefreshToken } from '../auth/google.ts';
 import { googleFetch, googleJson } from '../google/client.ts';
 
@@ -184,19 +184,19 @@ function fmtPct(v: number | null, warnAbove: number): string {
   return `<span class="${cls}">${(v * 100).toFixed(2)}%</span>`;
 }
 
-async function render(project: ProjectConfig): Promise<string> {
+async function render(project: ProjectConfig): Promise<{ html: string; hero?: Hero }> {
   const config = (project.widgets.playConsole ?? {}) as PlayConfig;
   const packageName = config.packageName;
   const lookbackDays = Math.max(1, Number(config.lookbackDays ?? 7) || 7);
 
   if (!packageName) {
-    return card('Play Console', `<p class="muted">Set <code>widgets.playConsole.packageName</code> in project.json.</p>`);
+    return { html: card('Play Console', `<p class="muted">Set <code>widgets.playConsole.packageName</code> in project.json.</p>`) };
   }
   if (!hasOAuthClient()) {
-    return errorCard('Play Console', 'Google OAuth client not configured — see /settings.');
+    return { html: errorCard('Play Console', 'Google OAuth client not configured — see /settings.') };
   }
   if (!hasRefreshToken()) {
-    return errorCard('Play Console', 'Not connected to Google — click Connect on /settings.');
+    return { html: errorCard('Play Console', 'Not connected to Google — click Connect on /settings.') };
   }
 
   const [crashRate, anrRate, reviews, rollouts] = await Promise.all([
@@ -220,25 +220,37 @@ async function render(project: ProjectConfig): Promise<string> {
   const rolloutBlock = activeRollouts.length === 0
     ? `<h3>Rollouts</h3><p class="muted">No staged rollouts in progress.</p>`
     : `<h3>Rollouts</h3><ul>${activeRollouts.map(r => {
-        const statusCls = r.status === 'halted' ? 'error' : 'warn';
+        const rolloutTone = r.status === 'halted' ? 'red' : 'amber';
         const pct = r.userFraction !== undefined ? ` · ${(r.userFraction * 100).toFixed(0)}%` : '';
         return `<li>
+          ${dot(rolloutTone)}
           <span class="tag">${escape(r.track)}</span>
           <span class="title">${escape(r.versionCodes || '(no versions)')}</span>
-          <span class="meta"><span class="${statusCls}">${escape(r.status)}</span>${pct}</span>
+          <span class="meta"><span class="tone-${rolloutTone}">${escape(r.status)}</span>${pct}</span>
         </li>`;
       }).join('')}</ul>`;
 
   const reviewsBlock = reviews.length === 0
-    ? `<h3>Low-star reviews (last ${lookbackDays}d)</h3><p class="muted">No 1-2★ reviews ✓</p>`
+    ? `<h3>Low-star reviews (last ${lookbackDays}d)</h3><p class="muted">No 1-2★ reviews.</p>`
     : `<h3>Low-star reviews (last ${lookbackDays}d)</h3>${truncatedList(reviews.map(r => `
       <li>
         <span class="warn">${'★'.repeat(r.rating)}${'☆'.repeat(5 - r.rating)}</span>
         ${r.text ? `<div class="desc">${escape(r.text)}</div>` : ''}
-        <span class="meta">${relTime(r.when)} ago</span>
+        <span class="meta">${relTime(r.when)}</span>
       </li>`))}`;
 
-  return card('Play Console', vitalsBlock + rolloutBlock + reviewsBlock);
+  // Hero = active rollout count. Red if anything halted, amber if active rollouts, green otherwise.
+  const halted = activeRollouts.some(r => r.status === 'halted');
+  const heroTone: Tone = halted ? 'red' : activeRollouts.length > 0 ? 'amber' : 'green';
+  const hero: Hero = {
+    value: activeRollouts.length,
+    tone: heroTone,
+    label: activeRollouts.length === 1 ? 'rollout' : 'rollouts',
+  };
+  return {
+    html: card('Play Console', vitalsBlock + rolloutBlock + reviewsBlock, { hero }),
+    hero,
+  };
 }
 
 export const playConsole: WidgetModule = {
@@ -261,5 +273,5 @@ export const playConsole: WidgetModule = {
       description: 'Period for crash/ANR averaging and review filtering. Default 7.',
     },
   ],
-  run: async project => ({ html: await render(project) }),
+  run: async project => render(project),
 };

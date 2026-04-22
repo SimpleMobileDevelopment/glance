@@ -1,6 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk';
-import type { ProjectConfig, WidgetModule, Result } from '../types.ts';
-import { card, errorCard, escape, relTime, truncatedList } from '../render.ts';
+import type { ProjectConfig, WidgetModule, Result, Hero } from '../types.ts';
+import { card, errorCard, escape, relTime, truncatedList, dot, sparkBar, type Tone } from '../render.ts';
 import { buildKey, syncRun } from '../releaseChecklist.ts';
 import { memoize, conditionalFetch } from '../cache.ts';
 
@@ -32,10 +32,12 @@ type FailureSummary = {
   summary: string;
 };
 
+type RunHistory = { latest: Run | null; recent: Run[] };
+
 type RowData = {
   repo: string;
   branch: string;
-  result: Result<Run | null>;
+  result: Result<RunHistory>;
   checklist?: { key: string; items: string[]; checked: Set<string> };
   failureSummary?: FailureSummary;
 };
@@ -53,24 +55,26 @@ function isFailure(run: Run): boolean {
   return run.conclusion != null && FAILURE_CONCLUSIONS.has(run.conclusion);
 }
 
+const CI_HISTORY_SIZE = 15;
+
 async function fetchRun(
   repo: string,
   branch: string,
   workflow: string,
   headers: Record<string, string>,
-): Promise<Result<Run | null>> {
-  const url = `https://api.github.com/repos/${repo}/actions/workflows/${encodeURIComponent(workflow)}/runs?branch=${encodeURIComponent(branch)}&per_page=1`;
+): Promise<Result<RunHistory>> {
+  const url = `https://api.github.com/repos/${repo}/actions/workflows/${encodeURIComponent(workflow)}/runs?branch=${encodeURIComponent(branch)}&per_page=${CI_HISTORY_SIZE}`;
   const cacheKey = `ci:${repo}:${branch}:${workflow}`;
   try {
-    return await memoize<Result<Run | null>>({
+    return await memoize<Result<RunHistory>>({
       key: cacheKey,
       ttlMs: CI_TTL_MS,
       fetchFresh: async () => {
         const res = await conditionalFetch(url, { headers });
         if (!res.ok) return { ok: false, error: `GitHub ${res.status}: ${await res.text()}` };
         const json = await res.json() as { workflow_runs?: Run[] };
-        const run = json.workflow_runs?.[0];
-        return { ok: true, data: run ?? null };
+        const runs = json.workflow_runs ?? [];
+        return { ok: true, data: { latest: runs[0] ?? null, recent: runs } };
       },
     });
   } catch (e) {
@@ -164,19 +168,17 @@ async function summarizeFailure(
 }
 
 function statusMarkup(run: Run): string {
-  if (run.conclusion === 'success') {
-    return '<span class="ok">✓ success</span>';
-  }
-  if (isFailure(run)) {
-    return `<span class="error">✗ ${escape(run.conclusion ?? '')}</span>`;
-  }
-  if (run.conclusion === 'skipped') {
-    return '<span class="muted">— skipped</span>';
-  }
-  if (run.status === 'queued' || run.status === 'in_progress') {
-    return `<span class="warn">⏳ ${escape(run.status)}</span>`;
-  }
-  return `<span class="muted">${escape(run.conclusion ?? run.status ?? '?')}</span>`;
+  if (run.conclusion === 'success') return dot('green');
+  if (isFailure(run)) return dot('red');
+  if (run.conclusion === 'skipped') return dot('muted');
+  if (run.status === 'queued' || run.status === 'in_progress') return dot('amber');
+  return dot('muted');
+}
+
+function cellForRun(run: Run): 'ok' | 'err' | 'muted' {
+  if (run.conclusion === 'success') return 'ok';
+  if (isFailure(run)) return 'err';
+  return 'muted';
 }
 
 function renderChecklist(checklist: RowData['checklist']): string {
@@ -206,7 +208,7 @@ function renderRow(row: RowData): string {
       <span style="color:var(--error)">${escape(row.result.error)}</span>
     </li>`;
   }
-  const run = row.result.data;
+  const run = row.result.data.latest;
   if (!run) {
     return `
     <li>
@@ -221,18 +223,18 @@ function renderRow(row: RowData): string {
   return `
     <li>
       <a href="${escape(run.html_url)}" target="_blank" rel="noreferrer">
+        ${statusMarkup(run)}
         <span class="repo">${repo}</span>
         <span class="num">${branch}</span>
-        ${statusMarkup(run)}
         <span class="title">${escape(run.name ?? '')}</span>
       </a>
-      <span class="meta">${relTime(run.updated_at)} ago</span>
+      <span class="meta">${relTime(run.updated_at)}</span>
       ${aiSummary}
       ${renderChecklist(row.checklist)}
     </li>`;
 }
 
-async function render(project: ProjectConfig): Promise<{ html: string; summary: CiSummary }> {
+async function render(project: ProjectConfig): Promise<{ html: string; summary: CiSummary; hero?: Hero }> {
   const cfg = (project.widgets?.ci ?? {}) as CiConfig;
   const repos = cfg.repos ?? [];
   const branches = cfg.branches && cfg.branches.length > 0 ? cfg.branches : ['main'];
@@ -283,17 +285,17 @@ async function render(project: ProjectConfig): Promise<{ html: string; summary: 
       const result = await fetchRun(repo, branch, workflow, headers);
       const row: RowData = { repo, branch, result };
       const sideEffects: Promise<unknown>[] = [];
-      if (checklistItems.length > 0 && result.ok && result.data) {
+      if (checklistItems.length > 0 && result.ok && result.data.latest) {
         sideEffects.push((async () => {
           const key = buildKey(repo, workflow, branch);
-          const checked = await syncRun(key, result.data!.id, checklistItems);
+          const checked = await syncRun(key, result.data!.latest!.id, checklistItems);
           row.checklist = { key, items: checklistItems, checked: new Set(checked) };
         })());
       }
-      if (anthropicKey && result.ok && result.data && isFailure(result.data)) {
+      if (anthropicKey && result.ok && result.data.latest && isFailure(result.data.latest)) {
         sideEffects.push((async () => {
           try {
-            const fs = await summarizeFailure(repo, result.data!.id, headers, anthropicKey);
+            const fs = await summarizeFailure(repo, result.data!.latest!.id, headers, anthropicKey);
             if (fs) row.failureSummary = fs;
           } catch {
             // non-fatal; silently skip.
@@ -310,21 +312,39 @@ async function render(project: ProjectConfig): Promise<{ html: string; summary: 
   // human would read off the top of the card).
   let failedCount = 0;
   let latestRun: Run | null = null;
+  let latestRowRecent: Run[] = [];
+  let inProgress = false;
   for (const row of rows) {
-    if (!row.result.ok || !row.result.data) continue;
-    const run = row.result.data;
+    if (!row.result.ok) continue;
+    const run = row.result.data.latest;
+    if (!run) continue;
     if (isFailure(run)) failedCount++;
+    if (run.status === 'in_progress' || run.status === 'queued') inProgress = true;
     if (!latestRun || run.updated_at > latestRun.updated_at) {
       latestRun = run;
+      latestRowRecent = row.result.data.recent;
     }
   }
   const latestRunStatus = latestRun
     ? (latestRun.conclusion ?? latestRun.status ?? null)
     : null;
 
+  // Sparkline is the most-recent run's row, oldest→newest so the trend reads left-to-right.
+  const historyCells = [...latestRowRecent].reverse().map(cellForRun);
+  const heroTone: Tone = failedCount > 0 ? 'red' : inProgress ? 'amber' : latestRun ? 'green' : 'muted';
+  const hero: Hero = {
+    value: failedCount,
+    tone: heroTone,
+    label: failedCount === 1 ? 'failure' : 'failures',
+  };
+
   return {
-    html: card('Release build', truncatedList(rows.map(renderRow))),
+    html: card('Release build', truncatedList(rows.map(renderRow)), {
+      hero,
+      sparkline: historyCells.length > 0 ? sparkBar(historyCells) : undefined,
+    }),
     summary: { failedCount, latestRunStatus },
+    hero,
   };
 }
 
@@ -363,7 +383,7 @@ export const ci: WidgetModule = {
     },
   ],
   run: async project => {
-    const { html, summary } = await render(project);
-    return { html, summary };
+    const { html, summary, hero } = await render(project);
+    return { html, summary, hero };
   },
 };
