@@ -51,7 +51,7 @@ function renderRepo(repoPath: string, result: Result<RepoStatus>): string {
   </li>`;
 }
 
-async function run(project: ProjectConfig): Promise<string> {
+async function render(project: ProjectConfig): Promise<string> {
   const config = (project.widgets.gitStatus ?? {}) as GitStatusConfig;
   const paths = config.paths ?? [];
   if (paths.length === 0) {
@@ -74,5 +74,5 @@ export const gitStatus: WidgetModule = {
       description: 'Absolute paths to local git repos.',
     },
   ],
-  run,
+  run: async project => ({ html: await render(project) }),
 };

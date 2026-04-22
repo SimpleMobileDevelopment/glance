@@ -1,5 +1,5 @@
 import { readFile, writeFile } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { createHash, randomBytes } from 'node:crypto';
 
 const AUTH_FILE = '.google-auth.json';
@@ -10,6 +10,7 @@ export const SCOPES = [
   'https://www.googleapis.com/auth/playdeveloperreporting',
   'https://www.googleapis.com/auth/cloud-platform.read-only',
   'https://www.googleapis.com/auth/bigquery.readonly',
+  'https://www.googleapis.com/auth/calendar.readonly',
   'https://www.googleapis.com/auth/userinfo.email',
   'openid',
 ];
@@ -58,6 +59,26 @@ export async function readAuthState(): Promise<GoogleAuthState> {
   } catch {
     return {};
   }
+}
+
+/**
+ * Compares the scopes stored during the last OAuth exchange to the current
+ * SCOPES constant. Returns the list of scopes that are in SCOPES but were NOT
+ * granted at connect time. Returns `[]` when no auth state exists yet (don't
+ * nag users who never connected) or when stored scopes aren't recorded.
+ */
+export function getScopeDrift(): string[] {
+  if (!existsSync(AUTH_FILE)) return [];
+  let state: GoogleAuthState;
+  try {
+    state = JSON.parse(readFileSync(AUTH_FILE, 'utf8')) as GoogleAuthState;
+  } catch {
+    return [];
+  }
+  const stored = state.scopes;
+  if (!stored || stored.length === 0) return [];
+  const storedSet = new Set(stored);
+  return SCOPES.filter(s => !storedSet.has(s));
 }
 
 async function writeAuthState(state: GoogleAuthState): Promise<void> {

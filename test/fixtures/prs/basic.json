@@ -1,0 +1,47 @@
+{
+  "urlPatterns": {
+    "api.github.com/search/issues?q=is%3Aopen%20is%3Apr%20author%3Atest-prs-basic-user": {
+      "items": [
+        {
+          "title": "Fix null pointer in login flow",
+          "body": "Closes FUT-101",
+          "html_url": "https://github.com/acme/mobile/pull/42",
+          "repository_url": "https://api.github.com/repos/acme/mobile",
+          "number": 42,
+          "updated_at": "2026-04-21T09:00:00Z",
+          "user": { "login": "test-prs-basic-user" },
+          "draft": false
+        },
+        {
+          "title": "WIP: refactor network layer",
+          "body": "",
+          "html_url": "https://github.com/acme/mobile/pull/43",
+          "repository_url": "https://api.github.com/repos/acme/mobile",
+          "number": 43,
+          "updated_at": "2026-04-20T12:30:00Z",
+          "user": { "login": "test-prs-basic-user" },
+          "draft": true
+        }
+      ]
+    },
+    "api.github.com/search/issues?q=is%3Aopen%20is%3Apr%20review-requested%3Atest-prs-basic-user": {
+      "items": [
+        {
+          "title": "Bump Kotlin to 2.0",
+          "body": "",
+          "html_url": "https://github.com/acme/mobile/pull/50",
+          "repository_url": "https://api.github.com/repos/acme/mobile",
+          "number": 50,
+          "updated_at": "2026-04-21T08:15:00Z",
+          "user": { "login": "someoneelse" },
+          "draft": false
+        }
+      ]
+    }
+  },
+  "project": {
+    "displayName": "Test Project",
+    "github": { "username": "test-prs-basic-user", "tokenEnv": "GITHUB_TOKEN_FUTURE" },
+    "widgets": { "prs": {} }
+  }
+}

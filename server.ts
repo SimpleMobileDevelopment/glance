@@ -6,7 +6,9 @@ import path from 'node:path';
 import { renderSettings, type EnvVar } from './src/settings.ts';
 import { REGISTRY } from './src/registry.ts';
 import type { ProjectConfig } from './src/types.ts';
+import { parseProject } from './src/schema.ts';
 import { readState as readChecklistState, toggleItem as toggleChecklistItem } from './src/releaseChecklist.ts';
+import { rebuildAll, refreshWidget, getState } from './src/pageState.ts';
 import {
   buildAuthUrl,
   completeAuthFlow,
@@ -35,13 +37,19 @@ async function rebuild(): Promise<void> {
   console.log('[build] start');
   const start = Date.now();
   try {
-    await new Promise<void>((resolve, reject) => {
-      const child = spawn(process.execPath, ['--env-file-if-exists=.env', 'mission-control.ts'], {
-        stdio: 'inherit',
+    if (process.env.GLANCE_FORK_BUILD === '1') {
+      await new Promise<void>((resolve, reject) => {
+        const child = spawn(process.execPath, ['--env-file-if-exists=.env', 'mission-control.ts'], {
+          stdio: 'inherit',
+        });
+        child.on('exit', code => code === 0 ? resolve() : reject(new Error(`build exit ${code}`)));
+        child.on('error', reject);
       });
-      child.on('exit', code => code === 0 ? resolve() : reject(new Error(`build exit ${code}`)));
-      child.on('error', reject);
-    });
+    } else {
+      const project = await loadProject();
+      if (!project) throw new Error('project.json missing or invalid');
+      await rebuildAll(project);
+    }
     console.log(`[build] done in ${Date.now() - start}ms`);
   } catch (e) {
     console.error('[build] failed:', (e as Error).message);
@@ -80,7 +88,13 @@ async function readBody(req: IncomingMessage): Promise<string> {
 async function loadProject(): Promise<ProjectConfig | null> {
   if (!existsSync(PROJECT_FILE)) return null;
   const raw = await readFile(PROJECT_FILE, 'utf8');
-  return JSON.parse(raw) as ProjectConfig;
+  const json = JSON.parse(raw);
+  const parsed = parseProject(json);
+  if (!parsed.ok) {
+    console.warn(`[project.json] schema issues:\n  ${parsed.issues.join('\n  ')}`);
+    return json as ProjectConfig;
+  }
+  return parsed.project;
 }
 
 function computeEnvVarUsage(project: ProjectConfig | null): Map<string, Set<string>> {
@@ -166,6 +180,39 @@ const server = createServer(async (req, res) => {
     if (method === 'POST' && url.pathname === '/api/refresh') {
       rebuild().catch(e => console.error('[refresh]', e.message));
       res.writeHead(202, { 'Content-Type': 'application/json' }).end('{"ok":true}');
+      return;
+    }
+
+    if (
+      method === 'POST' &&
+      url.pathname.startsWith('/api/widget/') &&
+      url.pathname.endsWith('/refresh')
+    ) {
+      const id = url.pathname.slice('/api/widget/'.length, -'/refresh'.length);
+      if (!id || id.includes('/')) {
+        res.writeHead(400, { 'Content-Type': 'text/plain' }).end('invalid widget id');
+        return;
+      }
+      const project = await loadProject();
+      if (!project) {
+        res.writeHead(500, { 'Content-Type': 'text/plain' }).end('project.json missing');
+        return;
+      }
+      if (!REGISTRY.some(w => w.id === id)) {
+        res.writeHead(404, { 'Content-Type': 'application/json' }).end(JSON.stringify({ error: 'unknown widget' }));
+        return;
+      }
+      try {
+        const html = await refreshWidget(project, id);
+        res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify({ html }));
+      } catch (e) {
+        const msg = (e as Error).message;
+        if (/unknown widget|not enabled/i.test(msg)) {
+          res.writeHead(404, { 'Content-Type': 'application/json' }).end(JSON.stringify({ error: msg }));
+        } else {
+          res.writeHead(500, { 'Content-Type': 'application/json' }).end(JSON.stringify({ error: msg }));
+        }
+      }
       return;
     }
 
@@ -271,6 +318,15 @@ const server = createServer(async (req, res) => {
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
       res.end(renderSettings(project, env, known, REGISTRY, googleStatus));
       return;
+    }
+
+    if (method === 'GET' && (url.pathname === '/' || url.pathname === '/index.html')) {
+      const mem = getState().html;
+      if (mem) {
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-cache' });
+        res.end(mem);
+        return;
+      }
     }
 
     const fsPath = path.join(DIST_DIR, url.pathname === '/' ? 'index.html' : url.pathname.replace(/^\//, ''));

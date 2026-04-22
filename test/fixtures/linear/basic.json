@@ -1,0 +1,53 @@
+{
+  "urlPatterns": {
+    "api.linear.app/graphql|QUERY:MissionControl|teamKey:TST-linear-basic": {
+      "data": {
+        "viewer": {
+          "assignedIssues": {
+            "nodes": [
+              {
+                "identifier": "TST-linear-basic-1",
+                "title": "Write documentation",
+                "url": "https://linear.app/test/issue/TST-linear-basic-1",
+                "priority": 2,
+                "priorityLabel": "High",
+                "updatedAt": "2026-04-21T09:30:00Z",
+                "state": { "name": "In Progress", "type": "started" },
+                "team": { "key": "TST" }
+              },
+              {
+                "identifier": "TST-linear-basic-2",
+                "title": "Fix crash on startup",
+                "url": "https://linear.app/test/issue/TST-linear-basic-2",
+                "priority": 1,
+                "priorityLabel": "Urgent",
+                "updatedAt": "2026-04-20T14:00:00Z",
+                "state": { "name": "Todo", "type": "unstarted" },
+                "team": { "key": "TST" }
+              }
+            ]
+          }
+        },
+        "notifications": {
+          "nodes": [
+            {
+              "id": "n1",
+              "type": "issueAssignedToYou",
+              "url": "https://linear.app/test/issue/TST-linear-basic-3",
+              "createdAt": "2026-04-21T08:00:00Z",
+              "readAt": null,
+              "snoozedUntilAt": null,
+              "actor": { "displayName": "Alice", "name": "Alice" },
+              "issue": { "identifier": "TST-linear-basic-3", "title": "Something new" }
+            }
+          ]
+        }
+      }
+    }
+  },
+  "project": {
+    "displayName": "Test Project",
+    "github": { "username": "someone", "tokenEnv": "GITHUB_TOKEN_FUTURE" },
+    "widgets": { "linear": { "tokenEnv": "LINEAR_API_KEY" } }
+  }
+}

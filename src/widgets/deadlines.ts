@@ -54,7 +54,7 @@ function formatWhen(days: number, iso: string): string {
   return `${iso} · in ${days}d`;
 }
 
-async function run(project: ProjectConfig): Promise<string> {
+async function render(project: ProjectConfig): Promise<string> {
   const config = (project.widgets.deadlines ?? {}) as DeadlinesConfig;
 
   let bundled: Deadline[] = [];
@@ -123,5 +123,5 @@ export const deadlines: WidgetModule = {
       ],
     },
   ],
-  run,
+  run: async project => ({ html: await render(project) }),
 };

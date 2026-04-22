@@ -1,0 +1,27 @@
+{
+  "urlPatterns": {
+    "api.github.com/repos/acme/ci-fail/actions/workflows/release.yml/runs?branch=main": {
+      "workflow_runs": [
+        {
+          "id": 2000002,
+          "name": "Release build",
+          "html_url": "https://github.com/acme/ci-fail/actions/runs/2000002",
+          "status": "completed",
+          "conclusion": "failure",
+          "updated_at": "2026-04-21T11:00:00Z"
+        }
+      ]
+    }
+  },
+  "project": {
+    "displayName": "Test Project",
+    "github": { "username": "someone", "tokenEnv": "GITHUB_TOKEN_FUTURE" },
+    "widgets": {
+      "ci": {
+        "repos": ["acme/ci-fail"],
+        "branches": ["main"],
+        "workflow": "release.yml"
+      }
+    }
+  }
+}

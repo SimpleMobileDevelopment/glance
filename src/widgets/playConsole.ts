@@ -1,7 +1,7 @@
 import type { ProjectConfig, WidgetModule } from '../types.ts';
 import { card, errorCard, escape, relTime, truncatedList } from '../render.ts';
-import { getAccessToken, hasOAuthClient, hasRefreshToken } from '../auth/google.ts';
-import { friendlyGoogleError } from '../errors.ts';
+import { hasOAuthClient, hasRefreshToken } from '../auth/google.ts';
+import { googleFetch, googleJson } from '../google/client.ts';
 
 type PlayConfig = {
   packageName?: string;
@@ -30,19 +30,6 @@ function parseFreshnessCap(errText: string): DatePart | null {
   return { year: Number(m[1]), month: Number(m[2]), day: Number(m[3]) };
 }
 
-async function gfetch<T>(path: string, token: string, init?: RequestInit, base: string = API): Promise<T> {
-  const res = await fetch(`${base}${path}`, {
-    ...init,
-    headers: {
-      ...(init?.headers ?? {}),
-      Authorization: `Bearer ${token}`,
-      'Content-Type': 'application/json',
-    },
-  });
-  if (!res.ok) throw new Error(friendlyGoogleError(await res.text(), res.status));
-  return res.json() as Promise<T>;
-}
-
 type TimelineBody = {
   timelineSpec: { aggregationPeriod: string; startTime: DatePart; endTime: DatePart };
   metrics: string[];
@@ -50,51 +37,40 @@ type TimelineBody = {
 
 async function queryMetricSet<T>(
   path: string,
-  token: string,
   body: TimelineBody,
   lookbackDays: number,
 ): Promise<T> {
-  const headers = {
-    Authorization: `Bearer ${token}`,
-    'Content-Type': 'application/json',
-  };
-  const res = await fetch(`${REPORTING_API}${path}`, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify(body),
-  });
-  if (res.ok) return res.json() as Promise<T>;
-
-  const errText = await res.text();
-  if (res.status === 400) {
-    const cap = parseFreshnessCap(errText);
-    if (cap) {
-      const endMs = Date.UTC(cap.year, cap.month - 1, cap.day);
-      const retryBody: TimelineBody = {
-        ...body,
-        timelineSpec: {
-          ...body.timelineSpec,
-          startTime: datePartFromMs(endMs - lookbackDays * 86_400_000),
-          endTime: cap,
-        },
-      };
-      const res2 = await fetch(`${REPORTING_API}${path}`, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(retryBody),
-      });
-      if (res2.ok) return res2.json() as Promise<T>;
-      throw new Error(friendlyGoogleError(await res2.text(), res2.status));
-    }
+  const url = `${REPORTING_API}${path}`;
+  try {
+    return await googleJson<T>(url, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    });
+  } catch (e) {
+    const msg = (e as Error).message;
+    // Retry once with the freshness-capped window if the API told us about it.
+    const cap = parseFreshnessCap(msg);
+    if (!cap) throw e;
+    const endMs = Date.UTC(cap.year, cap.month - 1, cap.day);
+    const retryBody: TimelineBody = {
+      ...body,
+      timelineSpec: {
+        ...body.timelineSpec,
+        startTime: datePartFromMs(endMs - lookbackDays * 86_400_000),
+        endTime: cap,
+      },
+    };
+    return googleJson<T>(url, {
+      method: 'POST',
+      body: JSON.stringify(retryBody),
+    });
   }
-  throw new Error(friendlyGoogleError(errText, res.status));
 }
 
 type MetricRow = { metrics?: Array<{ decimalValue?: { value?: string } }> };
 
 async function fetchVitalRate(
   packageName: string,
-  token: string,
   metricSet: 'crashRateMetricSet' | 'anrRateMetricSet',
   metric: 'crashRate' | 'anrRate',
   lookbackDays: number,
@@ -111,7 +87,6 @@ async function fetchVitalRate(
   };
   const data = await queryMetricSet<{ rows?: MetricRow[] }>(
     `/apps/${encodeURIComponent(packageName)}/${metricSet}:query`,
-    token,
     body,
     lookbackDays,
   );
@@ -139,10 +114,9 @@ type ReviewsResponse = {
   }>;
 };
 
-async function fetchBadReviews(packageName: string, token: string, lookbackDays: number): Promise<Review[]> {
-  const data = await gfetch<ReviewsResponse>(
-    `/applications/${encodeURIComponent(packageName)}/reviews?maxResults=50`,
-    token,
+async function fetchBadReviews(packageName: string, lookbackDays: number): Promise<Review[]> {
+  const data = await googleJson<ReviewsResponse>(
+    `${API}/applications/${encodeURIComponent(packageName)}/reviews?maxResults=50`,
   );
   const threshold = Date.now() - lookbackDays * 86_400_000;
   const out: Review[] = [];
@@ -176,16 +150,14 @@ type TracksResponse = {
   }>;
 };
 
-async function fetchRollouts(packageName: string, token: string): Promise<Rollout[]> {
-  const edit = await gfetch<{ id: string }>(
-    `/applications/${encodeURIComponent(packageName)}/edits`,
-    token,
+async function fetchRollouts(packageName: string): Promise<Rollout[]> {
+  const edit = await googleJson<{ id: string }>(
+    `${API}/applications/${encodeURIComponent(packageName)}/edits`,
     { method: 'POST', body: '{}' },
   );
   try {
-    const data = await gfetch<TracksResponse>(
-      `/applications/${encodeURIComponent(packageName)}/edits/${edit.id}/tracks`,
-      token,
+    const data = await googleJson<TracksResponse>(
+      `${API}/applications/${encodeURIComponent(packageName)}/edits/${edit.id}/tracks`,
     );
     const out: Rollout[] = [];
     for (const t of data.tracks ?? []) {
@@ -200,9 +172,8 @@ async function fetchRollouts(packageName: string, token: string): Promise<Rollou
     }
     return out;
   } finally {
-    fetch(`${API}/applications/${encodeURIComponent(packageName)}/edits/${edit.id}`, {
+    googleFetch(`${API}/applications/${encodeURIComponent(packageName)}/edits/${edit.id}`, {
       method: 'DELETE',
-      headers: { Authorization: `Bearer ${token}` },
     }).catch(() => { /* edit auto-expires anyway */ });
   }
 }
@@ -213,7 +184,7 @@ function fmtPct(v: number | null, warnAbove: number): string {
   return `<span class="${cls}">${(v * 100).toFixed(2)}%</span>`;
 }
 
-async function run(project: ProjectConfig): Promise<string> {
+async function render(project: ProjectConfig): Promise<string> {
   const config = (project.widgets.playConsole ?? {}) as PlayConfig;
   const packageName = config.packageName;
   const lookbackDays = Math.max(1, Number(config.lookbackDays ?? 7) || 7);
@@ -228,21 +199,14 @@ async function run(project: ProjectConfig): Promise<string> {
     return errorCard('Play Console', 'Not connected to Google — click Connect on /settings.');
   }
 
-  let token: string;
-  try {
-    token = await getAccessToken();
-  } catch (e) {
-    return errorCard('Play Console', (e as Error).message);
-  }
-
   const [crashRate, anrRate, reviews, rollouts] = await Promise.all([
-    fetchVitalRate(packageName, token, 'crashRateMetricSet', 'crashRate', lookbackDays)
+    fetchVitalRate(packageName, 'crashRateMetricSet', 'crashRate', lookbackDays)
       .catch(e => { console.error('[playConsole] crash:', e.message); return null; }),
-    fetchVitalRate(packageName, token, 'anrRateMetricSet', 'anrRate', lookbackDays)
+    fetchVitalRate(packageName, 'anrRateMetricSet', 'anrRate', lookbackDays)
       .catch(e => { console.error('[playConsole] anr:', e.message); return null; }),
-    fetchBadReviews(packageName, token, lookbackDays)
+    fetchBadReviews(packageName, lookbackDays)
       .catch(e => { console.error('[playConsole] reviews:', e.message); return [] as Review[]; }),
-    fetchRollouts(packageName, token)
+    fetchRollouts(packageName)
       .catch(e => { console.error('[playConsole] rollouts:', e.message); return [] as Rollout[]; }),
   ]);
 
@@ -297,5 +261,5 @@ export const playConsole: WidgetModule = {
       description: 'Period for crash/ANR averaging and review filtering. Default 7.',
     },
   ],
-  run,
+  run: async project => ({ html: await render(project) }),
 };

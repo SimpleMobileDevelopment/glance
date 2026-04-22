@@ -19,12 +19,17 @@ export type FieldSpec =
       description?: string;
     };
 
+export type WidgetResult = {
+  html: string;
+  summary?: unknown;
+};
+
 export type WidgetModule = {
   id: string;
   title: string;
   envVars?: string[] | ((project: ProjectConfig) => string[]);
   configFields?: FieldSpec[];
-  run: (project: ProjectConfig) => Promise<string>;
+  run: (project: ProjectConfig) => Promise<WidgetResult>;
 };
 
 export type Result<T> =

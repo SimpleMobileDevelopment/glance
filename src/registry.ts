@@ -8,6 +8,8 @@ import { feed } from './widgets/feed.ts';
 import { deadlines } from './widgets/deadlines.ts';
 import { playConsole } from './widgets/playConsole.ts';
 import { crashlytics } from './widgets/crashlytics.ts';
+import { calendar } from './widgets/calendar.ts';
 import { linear } from './widgets/linear.ts';
+import { morningPlan } from './widgets/morningPlan.ts';
 
-export const REGISTRY: WidgetModule[] = [crashlytics, ci, playConsole, prs, linear, alerts, gitStatus, deadlines, drift, feed];
+export const REGISTRY: WidgetModule[] = [morningPlan, crashlytics, calendar, ci, playConsole, prs, linear, alerts, gitStatus, deadlines, drift, feed];

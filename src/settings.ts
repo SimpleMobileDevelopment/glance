@@ -1,4 +1,5 @@
 import { STYLE, escape } from './render.ts';
+import { getScopeDrift } from './auth/google.ts';
 import type { FieldSpec, ProjectConfig, WidgetModule } from './types.ts';
 
 export type EnvVar = { name: string; set: boolean; usedBy: string[] };
@@ -147,9 +148,12 @@ function renderGoogleCard(status: GoogleStatus): string {
     </section>`;
   }
   const when = status.connectedAt ? new Date(status.connectedAt).toLocaleString() : '';
+  const drift = getScopeDrift();
+  const driftBanner = drift.length === 0 ? '' : `<p class="warn" style="margin-top:8px;padding:8px 12px;border:1px solid var(--warning);border-radius:6px;font-size:12px;">Scopes out of date — click Reconnect to grant: <code>${escape(drift.join(', '))}</code></p>`;
   return `<section class="card">
     <h2>Google connection</h2>
     <p>Connected as <code>${escape(status.email ?? '(unknown)')}</code>${when ? ` · since ${escape(when)}` : ''}</p>
+    ${driftBanner}
     <div class="actions">
       <a href="/oauth/google/start"><button class="secondary">Reconnect</button></a>
       <button class="secondary" onclick="disconnectGoogle()">Disconnect</button>

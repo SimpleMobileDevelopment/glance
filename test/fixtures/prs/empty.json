@@ -1,0 +1,15 @@
+{
+  "urlPatterns": {
+    "api.github.com/search/issues?q=is%3Aopen%20is%3Apr%20author%3Atest-prs-empty-user": {
+      "items": []
+    },
+    "api.github.com/search/issues?q=is%3Aopen%20is%3Apr%20review-requested%3Atest-prs-empty-user": {
+      "items": []
+    }
+  },
+  "project": {
+    "displayName": "Test Project",
+    "github": { "username": "test-prs-empty-user", "tokenEnv": "GITHUB_TOKEN_FUTURE" },
+    "widgets": { "prs": {} }
+  }
+}

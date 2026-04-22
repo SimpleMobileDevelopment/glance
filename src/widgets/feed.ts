@@ -45,7 +45,7 @@ async function fetchFeed(sources: Source[]): Promise<Result<FeedItem[]>> {
   return { ok: true, data: all.slice(0, 25) };
 }
 
-async function run(project: ProjectConfig): Promise<string> {
+async function render(project: ProjectConfig): Promise<string> {
   const config = (project.widgets.feed ?? {}) as FeedConfig;
   const sources = config.feeds ?? [];
   if (sources.length === 0) {
@@ -77,5 +77,5 @@ export const feed: WidgetModule = {
       ],
     },
   ],
-  run,
+  run: async project => ({ html: await render(project) }),
 };

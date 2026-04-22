@@ -3,6 +3,9 @@ import path from 'node:path';
 import { compareVersions } from 'compare-versions';
 import type { ProjectConfig, WidgetModule, Result } from '../types.ts';
 import { card, errorCard, escape, truncatedList } from '../render.ts';
+import { memoize, conditionalFetch } from '../cache.ts';
+
+const DRIFT_TTL_MS = 10 * 60_000;
 
 type DriftConfig = { catalogs?: string[] };
 
@@ -18,8 +21,6 @@ type CatalogReport = {
   label: string;
   stale: StaleEntry[];
 };
-
-const latestCache = new Map<string, Promise<string | null>>();
 
 function parseCatalog(content: string): { pairs: Array<{ coordinate: Coordinate; declared: string }>; skipped: number } {
   const versions = new Map<string, string>();
@@ -111,31 +112,31 @@ function coordKey(c: Coordinate): string {
 }
 
 async function fetchLatest(c: Coordinate): Promise<string | null> {
-  const key = coordKey(c);
-  const cached = latestCache.get(key);
-  if (cached) return cached;
-  const promise = (async (): Promise<string | null> => {
-    const groupPath = c.group.replace(/\./g, '/');
-    const repos = [
-      `https://repo1.maven.org/maven2/${groupPath}/${c.artifact}/maven-metadata.xml`,
-      `https://dl.google.com/dl/android/maven2/${groupPath}/${c.artifact}/maven-metadata.xml`,
-      `https://jitpack.io/${groupPath}/${c.artifact}/maven-metadata.xml`,
-    ];
-    for (const url of repos) {
-      const res = await fetch(url);
-      if (!res.ok) continue;
-      const xml = await res.text();
-      const latestMatch = /<latest>([^<]+)<\/latest>/.exec(xml);
-      if (latestMatch) return latestMatch[1].trim();
-      const releaseMatch = /<release>([^<]+)<\/release>/.exec(xml);
-      if (releaseMatch) return releaseMatch[1].trim();
-      const versions = [...xml.matchAll(/<version>([^<]+)<\/version>/g)].map(m => m[1].trim());
-      if (versions.length > 0) return versions[versions.length - 1];
-    }
-    return null;
-  })();
-  latestCache.set(key, promise);
-  return promise;
+  const key = `drift:latest:${coordKey(c)}`;
+  return memoize({
+    key,
+    ttlMs: DRIFT_TTL_MS,
+    fetchFresh: async () => {
+      const groupPath = c.group.replace(/\./g, '/');
+      const repos = [
+        `https://repo1.maven.org/maven2/${groupPath}/${c.artifact}/maven-metadata.xml`,
+        `https://dl.google.com/dl/android/maven2/${groupPath}/${c.artifact}/maven-metadata.xml`,
+        `https://jitpack.io/${groupPath}/${c.artifact}/maven-metadata.xml`,
+      ];
+      for (const url of repos) {
+        const res = await conditionalFetch(url);
+        if (!res.ok) continue;
+        const xml = await res.text();
+        const latestMatch = /<latest>([^<]+)<\/latest>/.exec(xml);
+        if (latestMatch) return latestMatch[1].trim();
+        const releaseMatch = /<release>([^<]+)<\/release>/.exec(xml);
+        if (releaseMatch) return releaseMatch[1].trim();
+        const versions = [...xml.matchAll(/<version>([^<]+)<\/version>/g)].map(m => m[1].trim());
+        if (versions.length > 0) return versions[versions.length - 1];
+      }
+      return null;
+    },
+  });
 }
 
 function isStale(declared: string, latest: string): boolean {
@@ -196,7 +197,7 @@ function renderCatalog(report: CatalogReport): string {
   return `${header}${truncatedList(rows)}`;
 }
 
-async function run(project: ProjectConfig): Promise<string> {
+async function render(project: ProjectConfig): Promise<string> {
   const config = (project.widgets.drift ?? {}) as DriftConfig;
   const catalogs = config.catalogs ?? [];
   if (catalogs.length === 0) {
@@ -237,5 +238,5 @@ export const drift: WidgetModule = {
       description: 'Absolute paths to libs.versions.toml files.',
     },
   ],
-  run,
+  run: async project => ({ html: await render(project) }),
 };

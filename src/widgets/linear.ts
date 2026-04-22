@@ -1,5 +1,17 @@
 import type { ProjectConfig, WidgetModule, Result } from '../types.ts';
 import { card, errorCard, escape, relTime, truncatedList } from '../render.ts';
+import { memoize } from '../cache.ts';
+
+const LINEAR_TTL_MS = 60_000;
+
+type LinearSummary = { inbox: number; assigned: number };
+
+export type LinearIssueRef = {
+  id: string;
+  title: string;
+  state: string;
+  url: string;
+};
 
 type LinearConfig = {
   tokenEnv?: string;
@@ -121,6 +133,33 @@ function extractActor(node: any): string {
   return 'Linear';
 }
 
+async function linearGraphql<T = any>(
+  token: string,
+  query: string,
+  variables: Record<string, unknown>,
+  cacheKey: string,
+  ttlMs: number,
+): Promise<{ data?: T; errors?: Array<{ message: string }>; httpError?: string }> {
+  return memoize({
+    key: cacheKey,
+    ttlMs,
+    fetchFresh: async () => {
+      const res = await fetch('https://api.linear.app/graphql', {
+        method: 'POST',
+        headers: {
+          Authorization: token,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ query, variables }),
+      });
+      if (!res.ok) {
+        return { httpError: `Linear ${res.status}: ${await res.text()}` };
+      }
+      return await res.json() as { data?: T; errors?: Array<{ message: string }> };
+    },
+  });
+}
+
 async function fetchLinear(project: ProjectConfig): Promise<Result<LinearData>> {
   const config = (project.widgets.linear ?? {}) as LinearConfig;
   const tokenEnv = config.tokenEnv ?? DEFAULT_TOKEN_ENV;
@@ -134,21 +173,12 @@ async function fetchLinear(project: ProjectConfig): Promise<Result<LinearData>> 
   const notifLimit = Math.max((config.maxInboxItems ?? DEFAULT_MAX_INBOX) * 3, 50);
 
   try {
-    const res = await fetch('https://api.linear.app/graphql', {
-      method: 'POST',
-      headers: {
-        Authorization: token,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        query: QUERY,
-        variables: { stateTypes, issueLimit, notifLimit },
-      }),
-    });
-    if (!res.ok) {
-      return { ok: false, error: `Linear ${res.status}: ${await res.text()}` };
+    const cfgKey = JSON.stringify({ tokenEnv, stateTypes, issueLimit, notifLimit });
+    const cacheKey = `linear:main:${cfgKey}`;
+    const json = await linearGraphql(token, QUERY, { stateTypes, issueLimit, notifLimit }, cacheKey, LINEAR_TTL_MS);
+    if (json.httpError) {
+      return { ok: false, error: json.httpError };
     }
-    const json = await res.json() as { data?: any; errors?: Array<{ message: string }> };
     if (json.errors?.length) {
       return { ok: false, error: json.errors.map(e => e.message).join('; ') };
     }
@@ -182,6 +212,50 @@ async function fetchLinear(project: ProjectConfig): Promise<Result<LinearData>> 
     return { ok: true, data: { issues, inbox } };
   } catch (e) {
     return { ok: false, error: (e as Error).message };
+  }
+}
+
+const ISSUES_BY_ID_QUERY = `
+query IssuesByIdentifier($ids: [String!]!) {
+  issues(filter: { identifier: { in: $ids } }, first: 100) {
+    nodes {
+      identifier
+      title
+      url
+      state { name }
+    }
+  }
+}
+`;
+
+/**
+ * Fetch a specific set of Linear issues by their human identifiers (e.g. "FUT-123").
+ * Uses the same token / env-var resolution as the main widget. Returns an empty
+ * array on any failure (missing token, network error, Linear GraphQL error) so
+ * that callers using this for decoration (like prs.ts) can silently degrade.
+ */
+export async function fetchIssues(project: ProjectConfig, ids: string[]): Promise<LinearIssueRef[]> {
+  if (ids.length === 0) return [];
+  const config = (project.widgets.linear ?? {}) as LinearConfig;
+  const tokenEnv = config.tokenEnv ?? DEFAULT_TOKEN_ENV;
+  const token = process.env[tokenEnv];
+  if (!token) return [];
+
+  const uniqueIds = Array.from(new Set(ids)).sort();
+  const cacheKey = `linear:issues-by-id:${tokenEnv}:${uniqueIds.join(',')}`;
+
+  try {
+    const json = await linearGraphql(token, ISSUES_BY_ID_QUERY, { ids: uniqueIds }, cacheKey, LINEAR_TTL_MS);
+    if (json.httpError || json.errors?.length) return [];
+    const nodes: any[] = json.data?.issues?.nodes ?? [];
+    return nodes.map(n => ({
+      id: n.identifier,
+      title: n.title,
+      state: n.state?.name ?? '',
+      url: n.url,
+    }));
+  } catch {
+    return [];
   }
 }
 
@@ -232,11 +306,19 @@ function renderInbox(items: InboxItem[]): string {
   return `<h3>Inbox <span class="count">${items.length}</span></h3>${truncatedList(rows, { listClass: 'linear-inbox' })}`;
 }
 
-async function run(project: ProjectConfig): Promise<string> {
+async function render(project: ProjectConfig): Promise<{ html: string; summary: LinearSummary }> {
   const result = await fetchLinear(project);
-  if (!result.ok) return errorCard('Linear', result.error);
+  if (!result.ok) {
+    return { html: errorCard('Linear', result.error), summary: { inbox: 0, assigned: 0 } };
+  }
   const body = renderIssues(result.data.issues) + renderInbox(result.data.inbox);
-  return card('Linear', body);
+  return {
+    html: card('Linear', body),
+    summary: {
+      inbox: result.data.inbox.length,
+      assigned: result.data.issues.length,
+    },
+  };
 }
 
 export const linear: WidgetModule = {
@@ -262,5 +344,8 @@ export const linear: WidgetModule = {
       description: 'State types to include, one per line. Options: started, unstarted, backlog, completed, canceled, triage.',
     },
   ],
-  run,
+  run: async project => {
+    const { html, summary } = await render(project);
+    return { html, summary };
+  },
 };

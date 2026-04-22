@@ -65,6 +65,31 @@ export const STYLE = `<style>
   .checklist label { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; font-size: 13px; color: var(--fg); }
   .checklist input[type=checkbox] { margin: 0; cursor: pointer; accent-color: var(--accent); }
   .checklist li.done label { color: var(--muted); text-decoration: line-through; }
+  .widget-wrap { position: relative; transition: opacity 150ms ease; }
+  .widget-wrap > .card { margin: 0; }
+  .refresh-btn {
+    position: absolute; top: 10px; right: 10px;
+    width: 24px; height: 24px;
+    display: inline-flex; align-items: center; justify-content: center;
+    background: transparent; color: var(--muted);
+    border: 1px solid var(--border); border-radius: 4px;
+    cursor: pointer; font-size: 14px; line-height: 1;
+    padding: 0;
+    transition: color 120ms ease, border-color 120ms ease, transform 600ms ease;
+    z-index: 2;
+  }
+  .refresh-btn:hover { color: var(--fg); border-color: var(--muted); }
+  .refresh-btn:focus { outline: 1px solid var(--accent); outline-offset: 2px; }
+  .widget-wrap.refreshing { opacity: 0.55; pointer-events: none; }
+  .widget-wrap.refreshing .refresh-btn {
+    animation: glance-spin 900ms linear infinite;
+    pointer-events: none;
+  }
+  .widget-wrap.refresh-error .refresh-btn { color: var(--error); border-color: var(--error); }
+  @keyframes glance-spin {
+    from { transform: rotate(0deg); }
+    to   { transform: rotate(360deg); }
+  }
 </style>`;
 
 const DASHBOARD_SCRIPT = `<script>
@@ -103,6 +128,42 @@ document.addEventListener('change', async (e) => {
   } catch {
     cb.checked = !checked;
     li.classList.toggle('done', !checked);
+  }
+});
+
+document.addEventListener('click', async (e) => {
+  const target = e.target;
+  if (!(target instanceof Element)) return;
+  const btn = target.closest('[data-refresh]');
+  if (!btn) return;
+  e.preventDefault();
+  const id = btn.getAttribute('data-refresh');
+  if (!id) return;
+  const wrap = btn.closest('[data-widget-id]');
+  if (!wrap) return;
+  wrap.classList.remove('refresh-error');
+  wrap.classList.add('refreshing');
+  try {
+    const res = await fetch('/api/widget/' + encodeURIComponent(id) + '/refresh', { method: 'POST' });
+    if (!res.ok) throw new Error('refresh failed: ' + res.status);
+    const data = await res.json();
+    if (typeof data.html !== 'string') throw new Error('bad response');
+    const preservedBtn = wrap.querySelector(':scope > .refresh-btn');
+    wrap.innerHTML = data.html;
+    if (preservedBtn) wrap.appendChild(preservedBtn);
+    else {
+      const nb = document.createElement('button');
+      nb.className = 'refresh-btn';
+      nb.setAttribute('data-refresh', id);
+      nb.setAttribute('aria-label', 'refresh');
+      nb.textContent = '↻';
+      wrap.appendChild(nb);
+    }
+  } catch {
+    wrap.classList.add('refresh-error');
+    setTimeout(() => wrap.classList.remove('refresh-error'), 2500);
+  } finally {
+    wrap.classList.remove('refreshing');
   }
 });
 </script>`;
@@ -151,9 +212,12 @@ export function truncatedList(
 
 export function renderProjectPage(
   project: ProjectConfig,
-  sections: string[],
+  sections: { id: string; html: string }[],
   generatedAt: Date,
 ): string {
+  const wrapped = sections.map(s =>
+    `<div class="widget-wrap" data-widget-id="${escape(s.id)}">${s.html}<button class="refresh-btn" data-refresh="${escape(s.id)}" aria-label="refresh">↻</button></div>`
+  );
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -170,7 +234,7 @@ ${STYLE}
     <span class="stamp">updated ${generatedAt.toLocaleString()} · <a href="/settings">settings</a></span>
   </header>
   <main>
-    ${sections.join('\n    ')}
+    ${wrapped.join('\n    ')}
   </main>
 ${DASHBOARD_SCRIPT}
 </body>

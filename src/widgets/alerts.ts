@@ -129,7 +129,7 @@ async function classify(
   return parsed.items ?? [];
 }
 
-async function run(project: ProjectConfig): Promise<string> {
+async function render(project: ProjectConfig): Promise<string> {
   const config = (project.widgets.alerts ?? {}) as AlertsConfig;
   const stack = config.stack ?? [];
   const model = config.model ?? DEFAULT_MODEL;
@@ -235,5 +235,5 @@ export const alerts: WidgetModule = {
       description: 'Defaults to Haiku 4.5.',
     },
   ],
-  run,
+  run: async project => ({ html: await render(project) }),
 };
